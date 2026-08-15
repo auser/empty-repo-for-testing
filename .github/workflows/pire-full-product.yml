@@ -34,11 +34,18 @@ jobs:
           import tarfile
 
           archive = pathlib.Path("ci/pire-full-product.tar.gz")
-          expected = "7a9296a8fe8cb948f72f9d2c5e3b745cc1be2097ce35e4de66eb21503c0a30b5"
+          expected = "5e2772e083a8f2e4f3505eedccef02bfa37d8db58758c52d692a7ee2c05d8955"
           actual = hashlib.sha256(archive.read_bytes()).hexdigest()
           if actual != expected:
-              raise SystemExit(f"source archive checksum mismatch: {actual}")
+              raise SystemExit(
+                  f"source archive checksum mismatch: expected {expected}, got {actual}"
+              )
+
           with tarfile.open(archive, "r:gz") as source:
+              for member in source.getmembers():
+                  parts = pathlib.PurePosixPath(member.name).parts
+                  if member.name.startswith("/") or ".." in parts:
+                      raise SystemExit(f"unsafe archive member: {member.name}")
               source.extractall("work")
 
       - name: Generate lockfile
@@ -77,9 +84,17 @@ jobs:
           import tarfile
 
           root = pathlib.Path("work/pire-full-product")
+          output = pathlib.Path("pire-full-product-formatted.tar.gz")
+
+          def include(member: tarfile.TarInfo):
+              parts = pathlib.PurePosixPath(member.name).parts
+              if "target" in parts or ".git" in parts:
+                  return None
+              return member
+
           if root.exists():
-              with tarfile.open("pire-full-product-formatted.tar.gz", "w:gz") as archive:
-                  archive.add(root, arcname="pire")
+              with tarfile.open(output, "w:gz") as archive:
+                  archive.add(root, arcname="pire", filter=include)
 
       - uses: actions/upload-artifact@v4
         if: always()
