@@ -1,0 +1,111 @@
+name: Pire full compiler verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-full-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Reconstruct and validate source archive
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import io
+          import pathlib
+          import shutil
+          import tarfile
+
+          root = pathlib.Path.cwd()
+          chunks = sorted((root / "ci").glob("chunk-*"))
+          if len(chunks) != 8:
+              raise SystemExit(f"expected 8 archive chunks, found {len(chunks)}")
+
+          encoded = b"".join(path.read_bytes() for path in chunks)
+          archive = base64.b64decode(encoded, validate=True)
+          digest = hashlib.sha256(archive).hexdigest()
+          expected = "fded1feaebfafdcd7ca0d8712b61c074264a3ce1cd2ccd20d01cdb650ff0d26e"
+          if digest != expected:
+              raise SystemExit(f"archive SHA-256 mismatch: expected {expected}, got {digest}")
+
+          work = root / "work"
+          shutil.rmtree(work, ignore_errors=True)
+          work.mkdir()
+
+          with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
+              root_resolved = work.resolve()
+              for member in source.getmembers():
+                  target = (work / member.name).resolve()
+                  if root_resolved not in target.parents and target != root_resolved:
+                      raise SystemExit(f"unsafe archive path: {member.name}")
+                  if member.issym() or member.islnk():
+                      raise SystemExit(f"archive links are not permitted: {member.name}")
+              source.extractall(work)
+
+      - name: Toolchain
+        working-directory: work
+        run: rustc --version --verbose
+
+      - name: Generate lockfile
+        working-directory: work
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work
+
+      - name: Format
+        working-directory: work
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        working-directory: work
+        run: cargo check --locked --all-targets
+
+      - name: Clippy
+        working-directory: work
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: work
+        run: cargo test --locked --all-targets
+
+      - name: CLI smoke tests
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --locked -- --version
+          cargo run --locked -- doctor
+          cargo run --locked -- --provider echo --print "verification prompt"
+          cargo run --locked -- models list
+
+      - name: Upload exact verified source
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pire-full-verified-source
+          include-hidden-files: true
+          if-no-files-found: error
+          path: work
