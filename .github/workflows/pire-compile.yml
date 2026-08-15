@@ -1,0 +1,61 @@
+name: Pire compiler verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-compile-fix
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work
+
+      - name: Extract Pire source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf work
+          mkdir work
+          base64 --decode ci/pire-ci-input.tar.gz.b64 | tar -xzf - -C work
+
+      - name: Format
+        working-directory: work
+        run: cargo fmt --all -- --check 2>&1 | tee ../cargo-fmt.log
+
+      - name: Check
+        working-directory: work
+        run: cargo check --all-targets 2>&1 | tee ../cargo-check.log
+
+      - name: Clippy
+        working-directory: work
+        run: cargo clippy --all-targets -- -D warnings 2>&1 | tee ../cargo-clippy.log
+
+      - name: Test
+        working-directory: work
+        run: cargo test --all-targets 2>&1 | tee ../cargo-test.log
+
+      - name: Upload verification output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pire-verification
+          if-no-files-found: warn
+          path: |
+            work/Cargo.lock
+            cargo-fmt.log
+            cargo-check.log
+            cargo-clippy.log
+            cargo-test.log
