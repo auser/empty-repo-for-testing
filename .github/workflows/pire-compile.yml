@@ -1,0 +1,63 @@
+name: Pire compiler verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-compile-fix-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: pire
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Toolchain
+        run: rustc --version --verbose
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Verify lockfile
+        shell: python
+        run: |
+          import hashlib
+          from pathlib import Path
+
+          expected = Path("Cargo.lock.sha256").read_text(encoding="utf-8").split()[0]
+          actual = hashlib.sha256(Path("Cargo.lock").read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"Cargo.lock hash mismatch: expected {expected}, got {actual}")
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pire
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        run: cargo check --locked --all-targets
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --all-targets

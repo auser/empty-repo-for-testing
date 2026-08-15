@@ -1,0 +1,24 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+request_timeout_ms = 30000
+
+[runtime]
+blocking_min_threads = 1
+blocking_max_threads = 2
+
+[input]
+max_stdin_bytes = 52428800
+
+[logging]
+level = "info"
+json = false
+
+[http_client_config]
+request_timeout_secs = 120
+user_agent = "pire_agent/0.1.0"
+max_header_bytes = 65536
+read_chunk_bytes = 16384
+max_buffered_bytes = 262144
+max_text_body_bytes = 52428800
+max_request_headers = 100
