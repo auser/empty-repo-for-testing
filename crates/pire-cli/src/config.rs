@@ -1,4 +1,7 @@
-use std::{fmt, path::{Path, PathBuf}};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use clap::{Args, ValueEnum};
 use config::{Config as LayeredConfig, ConfigError, Environment, File};
@@ -211,7 +214,7 @@ pub struct CliOverrides {
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Default, Args, Serialize)]
 pub struct ProviderCliOverrides {
-    #[arg(long, value_enum)]
+    #[arg(long = "provider", value_enum)]
     pub kind: Option<ProviderKind>,
     #[arg(long)]
     pub model: Option<String>,
@@ -244,7 +247,12 @@ pub struct SecurityCliOverrides {
 pub struct LoggingCliOverrides {
     #[arg(long, value_enum)]
     pub level: Option<LogLevel>,
-    #[arg(long = "json-logs", num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    #[arg(
+        long = "json-logs",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
     pub json: Option<bool>,
 }
 
@@ -298,9 +306,11 @@ impl AppConfig {
         if self.provider.kind != ProviderKind::Offline && self.provider.model.trim().is_empty() {
             return Err(ConfigValidationError::EmptyModel);
         }
-        if matches!(self.provider.kind, ProviderKind::OpenAi | ProviderKind::OpenAiCompatible)
-            && !(self.provider.base_url.starts_with("http://")
-                || self.provider.base_url.starts_with("https://"))
+        if matches!(
+            self.provider.kind,
+            ProviderKind::OpenAi | ProviderKind::OpenAiCompatible
+        ) && !(self.provider.base_url.starts_with("http://")
+            || self.provider.base_url.starts_with("https://"))
         {
             return Err(ConfigValidationError::InvalidBaseUrl);
         }
