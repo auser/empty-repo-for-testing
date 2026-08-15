@@ -1,0 +1,6 @@
+[provider]
+kind = "offline"
+model = "offline"
+
+[security]
+approval_mode = "prompt"

@@ -1,0 +1,35 @@
+[provider]
+kind = "offline"
+model = "offline"
+base_url = "http://127.0.0.1:8080/v1"
+request_timeout_secs = 120
+max_response_bytes = 8388608
+
+[agent]
+max_steps = 16
+max_tool_calls = 64
+
+[tools]
+allow_read = true
+allow_write = true
+allow_process = true
+max_read_bytes = 4194304
+max_write_bytes = 4194304
+max_process_output_bytes = 2097152
+process_timeout_secs = 120
+max_list_entries = 10000
+
+[sessions]
+enabled = true
+
+[security]
+require_project_trust = true
+approval_mode = "prompt"
+
+[resources]
+max_total_bytes = 1048576
+include_user_instructions = true
+
+[logging]
+level = "info"
+json = false

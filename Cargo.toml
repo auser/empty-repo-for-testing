@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "crates/pire-core",
+    "crates/pire-providers",
+    "crates/pire-cli",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "Apache-2.0"
+repository = "https://example.invalid/pire"
+
+[workspace.dependencies]
+clap = { version = "4.6.6", features = ["derive", "env"] }
+config = { version = "0.15.25", default-features = false, features = ["toml"] }
+directories = "6.0.0"
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_with = { version = "3.16.1", features = ["macros"] }
+shlex = "1.3.0"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+uuid = { version = "1.19.0", features = ["serde", "v4"] }
+wait-timeout = "0.2.1"
+walkdir = "2.5.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[profile.release]
+lto = "thin"
+overflow-checks = true
+strip = "symbols"
