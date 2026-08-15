@@ -138,7 +138,7 @@ impl SessionStore {
                 sessions.push(value);
             }
         }
-        sessions.sort_by(|left, right| right.created_unix_ms.cmp(&left.created_unix_ms));
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.created_unix_ms));
         Ok(sessions)
     }
 
