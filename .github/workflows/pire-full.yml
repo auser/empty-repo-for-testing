@@ -38,9 +38,34 @@ jobs:
           import tarfile
 
           root = pathlib.Path.cwd()
+          expected_chunks = {
+              "chunk-000": "a28261c81d144b0460173e086186a02d3a0e5a6cd2b91bab08970dfcd337f507",
+              "chunk-001": "17c7b1cf3bca70d10a2ee0a56c8c083b82257654b3b670ca68c1c3d32f816cb9",
+              "chunk-002": "857f6434ae6b77970a4fd93b34fd5a5bb2d9d8c7b4fc0aed6cc16a489f91b8ba",
+              "chunk-003": "7939f9954def8bb5f0afd6a9f718944225b4145248dd43dffc1994c9564fd8b6",
+              "chunk-004": "fab9bc3e041f96e1be7202548456419bb191ad4241b13a799c30988d6518c4bb",
+              "chunk-005": "996811ee584ceabdfcbbe31e60462ae2e7dd48ef3ff75c0ff282a17265002990",
+              "chunk-006": "ae9667038aa7bcf04197161569b499e9bcc1afa51679012062aadc1d88771a92",
+              "chunk-007": "d0adcc32af2c28ae0fdaa7f59ae3dfc1a9f883772856850708a027f337279319",
+          }
+
           chunks = sorted((root / "ci").glob("chunk-*"))
-          if len(chunks) != 8:
-              raise SystemExit(f"expected 8 archive chunks, found {len(chunks)}")
+          if len(chunks) != len(expected_chunks):
+              raise SystemExit(
+                  f"expected {len(expected_chunks)} archive chunks, found {len(chunks)}"
+              )
+
+          for path in chunks:
+              data = path.read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              expected = expected_chunks.get(path.name)
+              print(f"{path.name}: bytes={len(data)} sha256={digest}")
+              if expected is None:
+                  raise SystemExit(f"unexpected archive chunk: {path.name}")
+              if digest != expected:
+                  raise SystemExit(
+                      f"chunk hash mismatch for {path.name}: expected {expected}, got {digest}"
+                  )
 
           encoded = b"".join(path.read_bytes() for path in chunks)
           archive = base64.b64decode(encoded, validate=True)
