@@ -21,13 +21,13 @@ impl Provider for OfflineProvider {
             });
         }
 
-        if last.role == Role::User {
-            if let Some(tool_call) = parse_tool_directive(&last.content)? {
-                return Ok(ProviderResponse {
-                    text: None,
-                    tool_calls: vec![tool_call],
-                });
-            }
+        if last.role == Role::User
+            && let Some(tool_call) = parse_tool_directive(&last.content)?
+        {
+            return Ok(ProviderResponse {
+                text: None,
+                tool_calls: vec![tool_call],
+            });
         }
 
         Ok(ProviderResponse {
