@@ -1,0 +1,89 @@
+name: Pire full product verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-full-product-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Verify and extract exact source archive
+        shell: python
+        run: |
+          import hashlib
+          import pathlib
+          import tarfile
+
+          archive = pathlib.Path("ci/pire-full-product.tar.gz")
+          expected = "7a9296a8fe8cb948f72f9d2c5e3b745cc1be2097ce35e4de66eb21503c0a30b5"
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"source archive checksum mismatch: {actual}")
+          with tarfile.open(archive, "r:gz") as source:
+              source.extractall("work")
+
+      - name: Generate lockfile
+        working-directory: work/pire-full-product
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work/pire-full-product
+
+      - name: Format source
+        working-directory: work/pire-full-product
+        run: cargo fmt --all
+
+      - name: Check formatting
+        working-directory: work/pire-full-product
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        working-directory: work/pire-full-product
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Clippy
+        working-directory: work/pire-full-product
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: work/pire-full-product
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Package compiler-formatted source
+        if: always()
+        shell: python
+        run: |
+          import pathlib
+          import tarfile
+
+          root = pathlib.Path("work/pire-full-product")
+          if root.exists():
+              with tarfile.open("pire-full-product-formatted.tar.gz", "w:gz") as archive:
+                  archive.add(root, arcname="pire")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pire-full-product-${{ runner.os }}
+          if-no-files-found: warn
+          path: pire-full-product-formatted.tar.gz
