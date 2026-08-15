@@ -11,10 +11,11 @@ pub fn system_prompt(workspace: &Workspace, config: &ResourcesConfig) -> io::Res
     ];
     let mut used = sections[0].len();
 
-    if config.include_user_instructions {
-        if let Some(path) = user_config_path().and_then(|path| path.parent().map(|parent| parent.join("PIRE.md"))) {
-            append_external(&mut sections, &mut used, &path, config.max_total_bytes)?;
-        }
+    if config.include_user_instructions
+        && let Some(path) =
+            user_config_path().and_then(|path| path.parent().map(|parent| parent.join("PIRE.md")))
+    {
+        append_external(&mut sections, &mut used, &path, config.max_total_bytes)?;
     }
 
     for relative in ["PIRE.md", "AGENTS.md", ".pire/PROMPT.md"] {
