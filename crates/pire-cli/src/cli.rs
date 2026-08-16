@@ -16,7 +16,9 @@ pub struct Cli {
     #[arg(long, short = 'p')]
     pub print: bool,
 
-    #[arg(long)]
+    // Use an explicit Clap ID because the flattened logging overrides also
+    // contain a Rust field named `json` for the `--json-logs` option.
+    #[arg(id = "output_json", long = "json")]
     pub json: bool,
 
     #[arg(long)]
