@@ -21,6 +21,15 @@ impl CliApprovalPolicy {
             interactive: io::stdin().is_terminal() && io::stderr().is_terminal(),
         }
     }
+
+    pub fn set_trusted(&mut self, trusted: bool) {
+        self.trusted = trusted;
+    }
+
+    #[must_use]
+    pub const fn trusted(&self) -> bool {
+        self.trusted
+    }
 }
 
 impl ApprovalPolicy for CliApprovalPolicy {
@@ -55,6 +64,9 @@ impl ApprovalPolicy for CliApprovalPolicy {
         io::stdin()
             .read_line(&mut response)
             .map_err(|error| ApprovalError::new(error.to_string()))?;
-        Ok(matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+        Ok(matches!(
+            response.trim().to_ascii_lowercase().as_str(),
+            "y" | "yes"
+        ))
     }
 }

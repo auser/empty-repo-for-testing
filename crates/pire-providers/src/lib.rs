@@ -1,19 +1,29 @@
 mod command;
 mod offline;
 mod openai_compatible;
+#[path = "router/mod.rs"]
+mod router;
 
 use std::{path::PathBuf, time::Duration};
 
-use pire_core::Provider;
+use pire_core::{CompletionRequest, Provider, ProviderError, ProviderResponse};
 use thiserror::Error;
 
 pub use command::CommandProvider;
 pub use offline::OfflineProvider;
 pub use openai_compatible::OpenAiCompatibleProvider;
+pub use router::{
+    ModelLearningStats, ModelSummary, RoutedModelSpec, RouterControl, RouterProvider, RouterSpec,
+    RouterStatus, RoutingStrategy,
+};
 
 #[derive(Debug, Clone)]
 pub enum ProviderSpec {
     Offline,
+    Unavailable {
+        name: String,
+        reason: String,
+    },
     OpenAi {
         model: String,
         api_key: String,
@@ -47,6 +57,9 @@ pub enum ProviderBuildError {
 pub fn build_provider(spec: ProviderSpec) -> Result<Box<dyn Provider>, ProviderBuildError> {
     match spec {
         ProviderSpec::Offline => Ok(Box::new(OfflineProvider)),
+        ProviderSpec::Unavailable { name, reason } => {
+            Ok(Box::new(UnavailableProvider { name, reason }))
+        }
         ProviderSpec::OpenAi {
             model: _,
             api_key,
@@ -83,5 +96,33 @@ pub fn build_provider(spec: ProviderSpec) -> Result<Box<dyn Provider>, ProviderB
             max_output_bytes,
             current_dir,
         )?)),
+    }
+}
+
+pub fn build_router(
+    spec: RouterSpec,
+) -> Result<(Box<dyn Provider>, RouterControl), ProviderBuildError> {
+    let (router, control) = RouterProvider::new(spec)?;
+    Ok((Box::new(router), control))
+}
+
+struct UnavailableProvider {
+    name: String,
+    reason: String,
+}
+
+impl Provider for UnavailableProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn complete(
+        &self,
+        _request: &CompletionRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
+        Err(ProviderError::new(format!(
+            "provider {} is unavailable: {}",
+            self.name, self.reason
+        )))
     }
 }

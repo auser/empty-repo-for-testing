@@ -1,6 +1,4 @@
-use pire_core::{
-    CompletionRequest, Provider, ProviderError, ProviderResponse, Role, ToolCall,
-};
+use pire_core::{CompletionRequest, Provider, ProviderError, ProviderResponse, Role, ToolCall};
 
 pub struct OfflineProvider;
 
@@ -18,6 +16,8 @@ impl Provider for OfflineProvider {
             return Ok(ProviderResponse {
                 text: Some(format!("Offline tool result:\n{}", last.content)),
                 tool_calls: Vec::new(),
+                usage: None,
+                route: None,
             });
         }
 
@@ -27,6 +27,8 @@ impl Provider for OfflineProvider {
             return Ok(ProviderResponse {
                 text: None,
                 tool_calls: vec![tool_call],
+                usage: None,
+                route: None,
             });
         }
 
@@ -36,6 +38,8 @@ impl Provider for OfflineProvider {
                 request.messages.len()
             )),
             tool_calls: Vec::new(),
+            usage: None,
+            route: None,
         })
     }
 

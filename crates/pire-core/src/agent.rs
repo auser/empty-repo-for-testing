@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{
     AgentEvent, AgentObserver, ApprovalPolicy, CompletionRequest, Message, ObserverError, Provider,
-    ProviderError, Role, ToolContext, ToolLimits, ToolOutput, ToolRegistry, Workspace,
+    ProviderError, Role, RouteInfo, ToolContext, ToolLimits, ToolOutput, ToolRegistry, Workspace,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -23,6 +23,7 @@ pub struct AgentRunRequest {
 pub struct AgentRunResult {
     pub final_text: String,
     pub messages: Vec<Message>,
+    pub last_route: Option<RouteInfo>,
 }
 
 #[derive(Debug, Error)]
@@ -35,6 +36,9 @@ pub enum AgentError {
 
     #[error("provider returned neither text nor tool calls")]
     EmptyResponse,
+
+    #[error("provider attempted tool calls while compacting context")]
+    CompactionToolCall,
 
     #[error("agent exceeded the configured step limit")]
     StepLimit,
@@ -96,6 +100,7 @@ impl Agent {
         messages.push(user_message);
 
         let mut tool_call_count = 0usize;
+        let mut last_route = None;
         for step in 1..=self.config.max_steps {
             observer.on_event(&AgentEvent::StepStarted { step })?;
             let completion = CompletionRequest {
@@ -104,14 +109,29 @@ impl Agent {
                 tools: self.tools.definitions(),
             };
             let response = self.provider.complete(&completion)?;
+            let provider = response
+                .route
+                .as_ref()
+                .map_or_else(|| self.provider.name().to_owned(), |route| route.provider.clone());
+            let model = response
+                .route
+                .as_ref()
+                .map_or_else(|| request.model.clone(), |route| route.model.clone());
+            last_route.clone_from(&response.route);
             observer.on_event(&AgentEvent::ProviderCompleted {
-                provider: self.provider.name().to_owned(),
+                provider,
+                model,
+                route: response.route.clone(),
+                usage: response.usage.clone(),
                 text_present: response.text.is_some(),
                 tool_call_count: response.tool_calls.len(),
             })?;
 
             if response.tool_calls.is_empty() {
-                let text = response.text.filter(|text| !text.is_empty()).ok_or(AgentError::EmptyResponse)?;
+                let text = response
+                    .text
+                    .filter(|text| !text.is_empty())
+                    .ok_or(AgentError::EmptyResponse)?;
                 let message = Message::assistant(text.clone());
                 observer.on_message(&message)?;
                 messages.push(message);
@@ -119,6 +139,7 @@ impl Agent {
                 return Ok(AgentRunResult {
                     final_text: text,
                     messages,
+                    last_route,
                 });
             }
 
@@ -161,4 +182,73 @@ impl Agent {
 
         Err(AgentError::StepLimit)
     }
+
+    pub fn compact_history(
+        &self,
+        model: &str,
+        history: &[Message],
+        instructions: Option<&str>,
+        max_transcript_bytes: usize,
+    ) -> Result<Vec<Message>, AgentError> {
+        if history.len() <= 8 {
+            return Ok(history.to_vec());
+        }
+
+        let system_messages = history
+            .iter()
+            .filter(|message| message.role == Role::System)
+            .cloned()
+            .collect::<Vec<_>>();
+        let transcript = compact_transcript(history, max_transcript_bytes);
+        let instruction = instructions.unwrap_or(
+            "Summarize the conversation for another coding agent. Preserve decisions, file paths, commands, errors, constraints, unfinished work, and important tool results. Be concise and factual.",
+        );
+        let request = CompletionRequest {
+            model: model.to_owned(),
+            messages: vec![
+                Message::system("You compact coding-agent context into a durable handoff summary."),
+                Message::user(format!("{instruction}\n\nConversation:\n{transcript}")),
+            ],
+            tools: Vec::new(),
+        };
+        let response = self.provider.complete(&request)?;
+        if !response.tool_calls.is_empty() {
+            return Err(AgentError::CompactionToolCall);
+        }
+        let summary = response
+            .text
+            .filter(|text| !text.trim().is_empty())
+            .ok_or(AgentError::EmptyResponse)?;
+
+        let mut compacted = system_messages;
+        compacted.push(Message::system(format!(
+            "Compacted conversation summary:\n{summary}"
+        )));
+        let tail_start = history.len().saturating_sub(6);
+        compacted.extend(
+            history[tail_start..]
+                .iter()
+                .filter(|message| message.role != Role::System)
+                .cloned(),
+        );
+        Ok(compacted)
+    }
+}
+
+fn compact_transcript(history: &[Message], max_bytes: usize) -> String {
+    let mut transcript = String::new();
+    for message in history.iter().filter(|message| message.role != Role::System) {
+        let role = match message.role {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+        };
+        let entry = format!("\n[{role}]\n{}\n", message.content);
+        if transcript.len().saturating_add(entry.len()) > max_bytes {
+            break;
+        }
+        transcript.push_str(&entry);
+    }
+    transcript
 }

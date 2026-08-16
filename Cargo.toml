@@ -16,6 +16,7 @@ repository = "https://example.invalid/pire"
 [workspace.dependencies]
 clap = { version = "4.6.6", features = ["derive", "env"] }
 config = { version = "0.15.25", default-features = false, features = ["toml"] }
+crossterm = { version = "0.29.0", default-features = false, features = ["bracketed-paste", "events", "windows"] }
 directories = "6.0.0"
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -34,6 +35,9 @@ unsafe_code = "forbid"
 unused_must_use = "deny"
 
 [profile.release]
-lto = "thin"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 overflow-checks = true
 strip = "symbols"

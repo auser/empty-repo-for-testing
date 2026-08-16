@@ -2,7 +2,7 @@ use std::{io::Read, time::Duration};
 
 use pire_core::{
     CompletionRequest, Message, Provider, ProviderError, ProviderResponse, Role, ToolCall,
-    ToolDefinition,
+    ToolDefinition, Usage,
 };
 use reqwest::blocking::{Client, Response};
 use serde::Deserialize;
@@ -75,8 +75,8 @@ impl OpenAiCompatibleProvider {
         }
         let response: ChatResponse = serde_json::from_slice(&bytes)
             .map_err(|error| ProviderError::new(format!("invalid provider response: {error}")))?;
-        let message = response
-            .choices
+        let ChatResponse { choices, usage } = response;
+        let message = choices
             .into_iter()
             .next()
             .ok_or_else(|| ProviderError::new("provider returned no choices"))?
@@ -85,9 +85,10 @@ impl OpenAiCompatibleProvider {
             .tool_calls
             .into_iter()
             .map(|call| {
-                let arguments = serde_json::from_str(&call.function.arguments).map_err(|error| {
-                    ProviderError::new(format!("invalid tool-call arguments: {error}"))
-                })?;
+                let arguments =
+                    serde_json::from_str(&call.function.arguments).map_err(|error| {
+                        ProviderError::new(format!("invalid tool-call arguments: {error}"))
+                    })?;
                 Ok(ToolCall {
                     id: call.id,
                     name: call.function.name,
@@ -98,6 +99,8 @@ impl OpenAiCompatibleProvider {
         Ok(ProviderResponse {
             text: message.content,
             tool_calls,
+            usage: usage.map(Into::into),
+            route: None,
         })
     }
 }
@@ -139,7 +142,9 @@ fn read_bounded(mut response: Response, max_bytes: usize) -> Result<Vec<u8>, Pro
         .by_ref()
         .take(max_bytes.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|error| ProviderError::new(format!("unable to read provider response: {error}")))?;
+        .map_err(|error| {
+            ProviderError::new(format!("unable to read provider response: {error}"))
+        })?;
     if bytes.len() > max_bytes {
         return Err(ProviderError::new(format!(
             "provider response exceeded {max_bytes} bytes"
@@ -195,6 +200,38 @@ fn tool_json(tool: &ToolDefinition) -> Value {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatUsage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokenDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromptTokenDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
+impl From<ChatUsage> for Usage {
+    fn from(value: ChatUsage) -> Self {
+        Self {
+            input_tokens: value.prompt_tokens,
+            output_tokens: value.completion_tokens,
+            cached_input_tokens: value
+                .prompt_tokens_details
+                .map_or(0, |details| details.cached_tokens),
+            latency_ms: None,
+            cost_usd: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -11,7 +11,11 @@ pub use agent::{Agent, AgentConfig, AgentError, AgentRunRequest, AgentRunResult}
 pub use approval::{ApprovalAction, ApprovalError, ApprovalPolicy, ApprovalRequest};
 pub use model::{Message, Role, ToolCall};
 pub use observer::{AgentEvent, AgentObserver, ObserverError};
-pub use provider::{CompletionRequest, Provider, ProviderError, ProviderResponse};
+pub use provider::{
+    CompletionRequest, Provider, ProviderError, ProviderResponse, RouteInfo, Usage,
+};
 pub use session::{SessionData, SessionError, SessionMetadata, SessionStore, SessionWriter};
-pub use tool::{Tool, ToolContext, ToolDefinition, ToolError, ToolLimits, ToolOutput, ToolRegistry};
+pub use tool::{
+    Tool, ToolContext, ToolDefinition, ToolError, ToolLimits, ToolOutput, ToolRegistry,
+};
 pub use workspace::{Workspace, WorkspaceError};

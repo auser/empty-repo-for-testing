@@ -19,6 +19,8 @@ pub enum PireError {
     #[error(transparent)]
     Agent(#[from] pire_core::AgentError),
     #[error(transparent)]
+    Observer(#[from] pire_core::ObserverError),
+    #[error(transparent)]
     Session(#[from] pire_core::SessionError),
     #[error(transparent)]
     Trust(#[from] TrustError),
@@ -41,6 +43,7 @@ impl PireError {
             | Self::ProviderBuild(_)
             | Self::Provider(_)
             | Self::Agent(_)
+            | Self::Observer(_)
             | Self::Session(_)
             | Self::Trust(_)
             | Self::Tool(_)
