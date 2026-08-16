@@ -1,0 +1,235 @@
+name: Pire Pi-style router release
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-pi-router-final-v2
+    paths-ignore:
+      - dist/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Reconstruct candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf work
+          mkdir work
+          git fetch --depth=1 origin chatgpt/pire-pi-router-partial
+          git archive FETCH_HEAD | tar -x -C work
+          cp -R patch/. work/
+
+      - name: Materialize staged modules
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import base64
+          import json
+          import os
+          import pathlib
+          import urllib.request
+
+          repository = "auser/empty-repo-for-testing"
+          blobs = {
+              "crates/pire-cli/src/app.rs": "c65eb27f803456658f26b9be543245dda4ba066a",
+              "crates/pire-cli/src/app/commands.rs": "b69272a4b76b7122d39096e46290d4c2baa650b9",
+              "crates/pire-cli/src/app/provider.rs": "144c15c858a302bc12a2b740c8466427f0e4a06e",
+              "crates/pire-cli/src/app/sessions.rs": "7ecdb2fc59b2a5b8cbcc680e09ace8d951ecfcdc",
+              "crates/pire-cli/src/app/top_level.rs": "aa94fd127ad9d1ac80ac843d472db21a303de839",
+          }
+          token = os.environ["GH_TOKEN"]
+          for path, sha in blobs.items():
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/git/blobs/{sha}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request) as response:
+                  payload = json.load(response)
+              destination = pathlib.Path("work") / path
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_bytes(base64.b64decode(payload["content"]))
+
+          commands = pathlib.Path("work/crates/pire-cli/src/app/commands.rs")
+          commands.write_text(
+              commands.read_text(encoding="utf-8").replace(".as_string()", ".as_str()"),
+              encoding="utf-8",
+          )
+
+          config = pathlib.Path("work/crates/pire-cli/src/config.rs")
+          text = config.read_text(encoding="utf-8")
+          marker = "impl Default for RouterConfig"
+          start = text.index(marker)
+          before, section = text[:start], text[start:]
+          section = section.replace("enabled: false,", "enabled: true,", 1)
+          config.write_text(before + section, encoding="utf-8")
+
+          command_list = pathlib.Path("work/crates/pire-cli/src/interactive/commands.rs")
+          text = command_list.read_text(encoding="utf-8")
+          additions = '''        SlashCommand::builtin("/scoped-models", "/scoped-models [FILTER]", "List configured models in the active scope"),
+          SlashCommand::builtin("/export", "/export [PATH]", "Export the active transcript as Markdown"),
+          SlashCommand::builtin("/import", "/import PATH", "Import a workspace file into the active context"),
+          SlashCommand::builtin("/share", "/share", "Explain transcript sharing options"),
+          SlashCommand::builtin("/changelog", "/changelog", "Show version and changelog location"),
+'''
+          needle = '        SlashCommand::builtin("/quit",'
+          if additions.strip() not in text:
+              text = text.replace(needle, additions + needle)
+          command_list.write_text(text, encoding="utf-8")
+
+      - name: Generate lockfile
+        working-directory: work
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work
+
+      - name: Apply supported fixes
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fix --workspace --all-targets --allow-dirty --allow-staged || true
+          cargo clippy --fix --workspace --all-targets --allow-dirty --allow-staged -- -D warnings || true
+          cargo fmt --all
+
+      - name: Check formatting
+        working-directory: work
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        working-directory: work
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Clippy
+        working-directory: work
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: work
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Build optimized binary
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: work
+        run: cargo build --locked --release -p pire-cli
+
+      - name: Verify size and package source
+        if: matrix.os == 'ubuntu-latest'
+        shell: python
+        run: |
+          import hashlib
+          import pathlib
+          import tarfile
+
+          root = pathlib.Path("work")
+          binary = root / "target/release/pire"
+          size = binary.stat().st_size
+          budget = 20_000_000
+          if size > budget:
+              raise SystemExit(f"binary size {size} exceeds budget {budget}")
+
+          verification = root / "VERIFICATION.txt"
+          verification.write_text(
+              "Pire Pi-style router verification\n"
+              "Rust: 1.97.1\n"
+              "Platforms: Ubuntu, macOS, Windows\n"
+              "Gates: fmt, check, clippy -D warnings, tests\n"
+              f"Optimized Linux binary: {size} bytes\n"
+              f"Binary size budget: {budget} bytes\n",
+              encoding="utf-8",
+          )
+
+          output = pathlib.Path("pire-pi-style-router-verified.tar.gz")
+          def include(member: tarfile.TarInfo):
+              parts = pathlib.PurePosixPath(member.name).parts
+              if "target" in parts or ".git" in parts or "ci" in parts:
+                  return None
+              return member
+
+          with tarfile.open(output, "w:gz") as archive:
+              for path in sorted(root.iterdir()):
+                  if path.name == "target":
+                      continue
+                  archive.add(path, arcname=f"pire/{path.name}", filter=include)
+
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          pathlib.Path("pire-pi-style-router-verified.tar.gz.sha256").write_text(
+              f"{digest}  {output.name}\n",
+              encoding="utf-8",
+          )
+          pathlib.Path("pire-pi-style-router-verification.txt").write_text(
+              verification.read_text(encoding="utf-8")
+              + f"Source SHA-256: {digest}\n",
+              encoding="utf-8",
+          )
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: pire-pi-style-router-release
+          path: |
+            pire-pi-style-router-verified.tar.gz
+            pire-pi-style-router-verified.tar.gz.sha256
+            pire-pi-style-router-verification.txt
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/pire-pi-router-final-v2
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pire-pi-style-router-release
+          path: release
+
+      - name: Publish verified downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp release/* dist/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Publish compiler-verified Pire archive [skip ci]"
+          git push origin HEAD:chatgpt/pire-pi-router-final-v2
