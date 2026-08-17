@@ -1,0 +1,36 @@
+# Safe project-scoped Pire configuration.
+#
+# Project files may tune routing, agent limits, resource loading, UI, and may
+# only make tool permissions more restrictive than the global configuration.
+# Providers, credentials, executable plugins, and storage paths are global-only.
+
+[router]
+strategy = "balanced"
+prefer_local = true
+max_fallbacks = 2
+assumed_output_tokens = 2048
+# max_estimated_cost_usd = 0.25
+
+[agent]
+max_steps = 24
+max_tool_calls = 96
+
+[tools]
+allow_read = true
+allow_write = true
+allow_process = false
+max_read_bytes = 4194304
+max_write_bytes = 4194304
+max_process_output_bytes = 2097152
+process_timeout_secs = 120
+max_list_entries = 10000
+
+[resources]
+max_total_bytes = 1048576
+include_user_instructions = true
+load_skills_on_demand = true
+
+[ui]
+color = true
+history_limit = 500
+show_cost = true
