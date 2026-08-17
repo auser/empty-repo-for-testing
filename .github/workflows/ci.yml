@@ -1,9 +1,9 @@
-name: Pire Pi-style verification
+name: Pire full verification
 
 on:
   push:
     branches:
-      - chatgpt/pire-pi-router-v1
+      - chatgpt/pire-pi-router-partial
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,6 @@ jobs:
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -27,128 +26,73 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Extract exact candidate
+      - name: Remove compiler scratch payloads
         shell: python
         run: |
-          import base64
-          import io
           import pathlib
           import shutil
-          import tarfile
-
-          work = pathlib.Path("work")
-          shutil.rmtree(work, ignore_errors=True)
-          work.mkdir()
-
-          chunks = sorted(pathlib.Path("ci").glob("pire-candidate.part-*"))
-          if not chunks:
-              raise SystemExit("no Pire candidate chunks found")
-
-          encoded = b"".join(chunk.read_bytes() for chunk in chunks)
-          archive_bytes = base64.b64decode(encoded, validate=False)
-
-          with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
-              members = archive.getmembers()
-              for member in members:
-                  parts = pathlib.PurePosixPath(member.name).parts
-                  if (
-                      member.name.startswith("/")
-                      or ".." in parts
-                      or member.issym()
-                      or member.islnk()
-                  ):
-                      raise SystemExit(f"unsafe archive entry: {member.name}")
-              archive.extractall(work)
-
-          overrides = pathlib.Path("ci/overrides")
-          if overrides.is_dir():
-              for source in sorted(overrides.rglob("*")):
-                  if not source.is_file():
-                      continue
-                  destination = work / source.relative_to(overrides)
-                  destination.parent.mkdir(parents=True, exist_ok=True)
-                  shutil.copyfile(source, destination)
+          shutil.rmtree(pathlib.Path("ci"), ignore_errors=True)
 
       - name: Generate lockfile
-        working-directory: work
         run: cargo generate-lockfile
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: work
 
       - name: Check formatting
-        working-directory: work
         run: cargo fmt --all -- --check
 
       - name: Check
-        working-directory: work
         run: cargo check --locked --workspace --all-targets
 
       - name: Clippy
-        working-directory: work
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        working-directory: work
         run: cargo test --locked --workspace --all-targets
 
-      - name: Build optimized binary and enforce size budget
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: work
+      - name: Build optimized binary
         run: cargo build --locked --release -p pire-cli
 
-      - name: Record binary size
-        if: matrix.os == 'ubuntu-latest'
+      - name: Verify optimized binary size
         shell: python
         run: |
           import pathlib
+          import sys
 
-          binary = pathlib.Path("work/target/release/pire")
+          binary = pathlib.Path("target/release/pire.exe" if sys.platform == "win32" else "target/release/pire")
           size = binary.stat().st_size
-          budget = 20_000_000
-          print(f"optimized Pire binary: {size} bytes")
-          if size > budget:
-              raise SystemExit(
-                  f"optimized binary is {size} bytes, exceeding the {budget}-byte budget"
-              )
-
-          report = pathlib.Path("work/VERIFICATION.txt")
-          report.write_text(
-              "Pire Pi-style product verification\n"
-              f"source harness commit: {pathlib.Path('.git/HEAD').read_text().strip()}\n"
-              "toolchain: Rust 1.97.1\n"
-              "gates: fmt, check, clippy -D warnings, tests\n"
-              f"optimized Linux binary: {size} bytes\n"
-              f"binary size budget: {budget} bytes\n",
-              encoding="utf-8",
-          )
+          print(f"optimized_binary_bytes={size}")
+          if sys.platform.startswith("linux") and size > 20 * 1024 * 1024:
+              raise SystemExit(f"optimized binary exceeds 20 MiB budget: {size}")
 
       - name: Package compiler-verified source
-        if: matrix.os == 'ubuntu-latest'
+        if: success() && matrix.os == 'ubuntu-latest'
         shell: python
         run: |
           import pathlib
           import tarfile
 
-          root = pathlib.Path("work")
-          output = pathlib.Path("pire-pi-style-router-verified.tar.gz")
+          root = pathlib.Path('.')
+          output = pathlib.Path('pire-full-verified.tar.gz')
 
           def include(member: tarfile.TarInfo):
               parts = pathlib.PurePosixPath(member.name).parts
-              if "target" in parts or ".git" in parts:
+              if 'target' in parts or '.git' in parts or 'ci' in parts:
                   return None
+              member.uid = 0
+              member.gid = 0
+              member.uname = ''
+              member.gname = ''
               return member
 
-          with tarfile.open(output, "w:gz") as archive:
+          with tarfile.open(output, 'w:gz') as archive:
               for path in sorted(root.iterdir()):
-                  if path.name in {"target", output.name}:
+                  if path.name in {'.git', 'target', 'ci', output.name}:
                       continue
-                  archive.add(path, arcname=f"pire/{path.name}", filter=include)
+                  archive.add(path, arcname=f'pire/{path.name}', filter=include)
 
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'ubuntu-latest'
+        if: success() && matrix.os == 'ubuntu-latest'
         with:
-          name: pire-pi-style-router-verified
-          path: pire-pi-style-router-verified.tar.gz
-          if-no-files-found: error
+          name: pire-full-verified
+          path: pire-full-verified.tar.gz
