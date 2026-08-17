@@ -106,6 +106,9 @@ jobs:
 
           print(f"candidate_sha256={actual}")
 
+      - name: Apply compiler-driven source fixes
+        run: python ci/apply-overrides.py work/pire
+
       - name: Generate lockfile
         working-directory: work/pire
         run: cargo generate-lockfile
