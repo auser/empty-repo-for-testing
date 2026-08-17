@@ -43,8 +43,8 @@ def main() -> None:
     )
     replace_once(
         mutation,
-        "MutationError::Stale(path.clone())",
-        "MutationError::Stale(path.to_path_buf())",
+        "        _ => Err(MutationError::Stale(path.clone())),",
+        "        _ => Err(MutationError::Stale(path.to_path_buf())),",
     )
     replace_once(
         workspace,
