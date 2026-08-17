@@ -1,0 +1,31 @@
+[package]
+name = "pire-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "pire"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+config.workspace = true
+crossterm.workspace = true
+directories.workspace = true
+pire-builtins.workspace = true
+pire-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true
