@@ -1,0 +1,207 @@
+name: Pire Next compiler verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-next-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Reconstruct and extract the exact candidate
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import io
+          import pathlib
+          import shutil
+          import tarfile
+
+          expected = "9e5b69b895e03e5b8bbc24046313423cc15ab57af4b9590ab0ac235f64b508d0"
+          source_root = pathlib.Path("ci/pire-next")
+          fix_root = pathlib.Path("ci/pire-next-fix")
+
+          def original(index: str) -> bytes:
+              return (source_root / f"part-{index}").read_bytes()
+
+          def repaired(index: str) -> bytes:
+              chunks = sorted(fix_root.glob(f"part-{index}-*"))
+              if not chunks:
+                  raise SystemExit(f"missing repair chunks for part-{index}")
+              return b"".join(path.read_bytes() for path in chunks)
+
+          encoded = b"".join([
+              repaired("00"),
+              original("01"),
+              repaired("02"),
+              repaired("03"),
+              original("04"),
+              original("05"),
+              original("06"),
+              repaired("07"),
+              original("08"),
+              original("09"),
+              original("10"),
+          ])
+
+          archive_bytes = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(archive_bytes).hexdigest()
+          if actual != expected:
+              raise SystemExit(
+                  f"candidate SHA-256 mismatch: expected {expected}, got {actual}"
+              )
+
+          work = pathlib.Path("work")
+          shutil.rmtree(work, ignore_errors=True)
+          work.mkdir()
+
+          with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+              members = archive.getmembers()
+              for member in members:
+                  parts = pathlib.PurePosixPath(member.name).parts
+                  if (
+                      member.name.startswith("/")
+                      or ".." in parts
+                      or member.issym()
+                      or member.islnk()
+                  ):
+                      raise SystemExit(f"unsafe archive entry: {member.name}")
+              archive.extractall(work)
+
+          project = work / "pire"
+          if not (project / "Cargo.toml").is_file():
+              raise SystemExit("candidate does not contain pire/Cargo.toml")
+
+          overrides = pathlib.Path("ci/overrides")
+          if overrides.is_dir():
+              for source in sorted(overrides.rglob("*")):
+                  if source.is_symlink():
+                      raise SystemExit(f"unsafe override symlink: {source}")
+                  if not source.is_file():
+                      continue
+                  relative = source.relative_to(overrides)
+                  destination = project / relative
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(source, destination)
+
+          print(f"candidate_sha256={actual}")
+
+      - name: Generate lockfile
+        working-directory: work/pire
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work/pire
+
+      - name: Format source
+        working-directory: work/pire
+        run: cargo fmt --all
+
+      - name: Check formatting
+        working-directory: work/pire
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets
+        working-directory: work/pire
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Clippy with warnings denied
+        working-directory: work/pire
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test all targets
+        working-directory: work/pire
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Build optimized binary
+        working-directory: work/pire
+        run: cargo build --locked --release -p pire-cli
+
+      - name: Record optimized binary size
+        working-directory: work/pire
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import platform
+
+          binary = pathlib.Path("target/release/pire.exe" if os.name == "nt" else "target/release/pire")
+          if not binary.is_file():
+              raise SystemExit(f"release binary is missing: {binary}")
+
+          size = binary.stat().st_size
+          report = pathlib.Path(f"verification-{platform.system().lower()}.txt")
+          report.write_text(
+              f"platform={platform.platform()}\n"
+              f"binary={binary}\n"
+              f"binary_size_bytes={size}\n",
+              encoding="utf-8",
+          )
+          print(f"optimized_binary_size_bytes={size}")
+
+          if platform.system() == "Linux" and size > 25_000_000:
+              raise SystemExit(
+                  f"optimized Linux binary exceeds 25,000,000-byte budget: {size}"
+              )
+
+      - name: Package compiler-verified source
+        if: success() && matrix.os == 'ubuntu-latest'
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import tarfile
+
+          project = pathlib.Path("work/pire")
+          report = project / "VERIFICATION.txt"
+          linux_size = (project / "verification-linux.txt").read_text(encoding="utf-8")
+          report.write_text(
+              "Pire Next compiler verification\n"
+              f"commit={os.environ['GITHUB_SHA']}\n"
+              f"run_id={os.environ['GITHUB_RUN_ID']}\n"
+              "rust=1.97.1\n"
+              "checks=fmt,check,clippy-D-warnings,test,release-build\n"
+              + linux_size,
+              encoding="utf-8",
+          )
+
+          output = pathlib.Path("pire-next-compiler-verified.tar.gz")
+
+          def include(member: tarfile.TarInfo):
+              parts = pathlib.PurePosixPath(member.name).parts
+              if "target" in parts:
+                  return None
+              return member
+
+          with tarfile.open(output, "w:gz") as archive:
+              archive.add(project, arcname="pire", filter=include)
+
+      - uses: actions/upload-artifact@v4
+        if: success() && matrix.os == 'ubuntu-latest'
+        with:
+          name: pire-next-compiler-verified
+          if-no-files-found: error
+          path: |
+            pire-next-compiler-verified.tar.gz
+            work/pire/verification-linux.txt
