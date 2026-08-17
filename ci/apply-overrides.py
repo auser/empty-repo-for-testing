@@ -52,9 +52,8 @@ def main() -> None:
         "            let _ = fs::remove_file(&temporary);\n"
         "            Err(error)\n"
         "        })?;",
-        "fs::rename(&temporary, &destination).map_err(|error| {\n"
+        "fs::rename(&temporary, &destination).inspect_err(|_| {\n"
         "            let _ = fs::remove_file(&temporary);\n"
-        "            error\n"
         "        })?;",
     )
 
