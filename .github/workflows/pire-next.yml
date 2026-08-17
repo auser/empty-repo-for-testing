@@ -128,7 +128,39 @@ jobs:
 
       - name: Clippy with warnings denied
         working-directory: work/pire
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        shell: python
+        run: |
+          import pathlib
+          import subprocess
+
+          command = [
+              "cargo",
+              "clippy",
+              "--locked",
+              "--workspace",
+              "--all-targets",
+              "--",
+              "-D",
+              "warnings",
+          ]
+          result = subprocess.run(
+              command,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              text=True,
+              check=False,
+          )
+          pathlib.Path("clippy.log").write_text(result.stdout, encoding="utf-8")
+          print(result.stdout, end="")
+          raise SystemExit(result.returncode)
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pire-next-diagnostics-${{ runner.os }}
+          if-no-files-found: warn
+          path: work/pire/clippy.log
 
       - name: Test all targets
         working-directory: work/pire
