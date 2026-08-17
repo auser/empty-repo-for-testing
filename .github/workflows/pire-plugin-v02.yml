@@ -1,0 +1,192 @@
+name: Pire plugin-first verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-plugin-first-v02
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Extract exact candidate
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import io
+          import pathlib
+          import shutil
+          import tarfile
+
+          chunks = sorted(pathlib.Path("ci").glob("candidate.part-[0-9][0-9]"))
+          expected_names = [f"candidate.part-{index:02d}" for index in range(8)]
+          names = [chunk.name for chunk in chunks]
+          if names != expected_names:
+              raise SystemExit(f"candidate chunk set is incomplete: {names}")
+
+          encoded = b"".join(chunk.read_bytes() for chunk in chunks)
+          archive_bytes = base64.b64decode(encoded, validate=True)
+          digest = hashlib.sha256(archive_bytes).hexdigest()
+          expected_digest = "6785edc3cc678fbd74e3562c1e35e728dbe6012777001ec69ff7a02dda2aef92"
+          if digest != expected_digest:
+              raise SystemExit(
+                  f"candidate archive hash mismatch: expected {expected_digest}, got {digest}"
+              )
+
+          work = pathlib.Path("work")
+          shutil.rmtree(work, ignore_errors=True)
+          work.mkdir()
+
+          with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+              members = archive.getmembers()
+              for member in members:
+                  parts = pathlib.PurePosixPath(member.name).parts
+                  if (
+                      member.name.startswith("/")
+                      or ".." in parts
+                      or member.issym()
+                      or member.islnk()
+                  ):
+                      raise SystemExit(f"unsafe archive entry: {member.name}")
+              archive.extractall(work)
+
+          candidate = work / "pire"
+          if not (candidate / "Cargo.toml").is_file():
+              raise SystemExit("candidate does not contain pire/Cargo.toml")
+
+          overrides = pathlib.Path("ci/overrides")
+          if overrides.is_dir():
+              for source in sorted(overrides.rglob("*")):
+                  if not source.is_file():
+                      continue
+                  destination = candidate / source.relative_to(overrides)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(source, destination)
+
+      - name: Generate lockfile
+        working-directory: work/pire
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work/pire
+
+      - name: Format source
+        working-directory: work/pire
+        run: cargo fmt --all
+
+      - name: Check formatting
+        working-directory: work/pire
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        working-directory: work/pire
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Clippy
+        working-directory: work/pire
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: work/pire
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Build optimized binary
+        working-directory: work/pire
+        run: cargo build --locked --release -p pire-cli
+
+      - name: Enforce Linux binary budget
+        if: matrix.os == 'ubuntu-latest'
+        shell: python
+        working-directory: work/pire
+        run: |
+          from pathlib import Path
+          binary = Path("target/release/pire")
+          size = binary.stat().st_size
+          limit = 25 * 1024 * 1024
+          print(f"pire release binary: {size} bytes")
+          if size > limit:
+              raise SystemExit(f"binary exceeds {limit} byte budget")
+
+      - name: Smoke test
+        shell: bash
+        working-directory: work/pire
+        run: |
+          set -euo pipefail
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            BIN=target/release/pire.exe
+          else
+            BIN=target/release/pire
+          fi
+          "$BIN" --version
+          "$BIN" --workspace . doctor
+          "$BIN" --workspace . --no-session --print hello
+
+      - name: Write verification report
+        if: matrix.os == 'ubuntu-latest'
+        shell: python
+        working-directory: work/pire
+        run: |
+          from pathlib import Path
+          size = Path("target/release/pire").stat().st_size
+          Path("VERIFICATION.txt").write_text(
+              "Candidate archive SHA-256: 6785edc3cc678fbd74e3562c1e35e728dbe6012777001ec69ff7a02dda2aef92\n"
+              "Rust: 1.97.1\n"
+              "Platforms: Ubuntu, macOS, Windows\n"
+              "Checks: cargo fmt --check, cargo check --locked --workspace --all-targets, "
+              "cargo clippy --locked --workspace --all-targets -- -D warnings, "
+              "cargo test --locked --workspace --all-targets, release build, smoke tests\n"
+              f"Linux optimized binary bytes: {size}\n",
+              encoding="utf-8",
+          )
+
+      - name: Package compiler-verified source
+        if: matrix.os == 'ubuntu-latest'
+        shell: python
+        working-directory: work/pire
+        run: |
+          import pathlib
+          import tarfile
+
+          root = pathlib.Path(".")
+          output = pathlib.Path("pire-plugin-first-v02-verified.tar.gz")
+
+          def include(member: tarfile.TarInfo):
+              parts = pathlib.PurePosixPath(member.name).parts
+              if ".git" in parts or "target" in parts:
+                  return None
+              return member
+
+          with tarfile.open(output, "w:gz") as archive:
+              for path in sorted(root.iterdir()):
+                  if path.name in {".git", "target", output.name}:
+                      continue
+                  archive.add(path, arcname=f"pire/{path.name}", filter=include)
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: pire-plugin-first-v02-verified
+          if-no-files-found: error
+          path: |
+            work/pire/pire-plugin-first-v02-verified.tar.gz
+            work/pire/VERIFICATION.txt
