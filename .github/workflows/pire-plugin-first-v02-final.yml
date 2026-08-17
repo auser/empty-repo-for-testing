@@ -1,0 +1,152 @@
+name: Pire plugin-first v0.2 final verification
+
+on:
+  push:
+    branches:
+      - chatgpt/pire-plugin-first-v02
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Prepare exact compiler candidate
+        shell: python
+        run: |
+          python ci/apply_fixes.py
+          python ci/apply_fixes_v2.py
+
+      - name: Generate lockfile
+        working-directory: work
+        run: cargo generate-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: work
+
+      - name: Format exact candidate
+        working-directory: work
+        run: cargo fmt --all
+
+      - name: Check formatting
+        working-directory: work
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets
+        working-directory: work
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Clippy
+        working-directory: work
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: work
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Build optimized binary
+        working-directory: work
+        run: cargo build --locked --release -p pire-cli
+
+      - name: Enforce optimized binary size budget
+        shell: python
+        run: |
+          import pathlib
+          import platform
+
+          executable = pathlib.Path("work/target/release/pire.exe" if platform.system() == "Windows" else "work/target/release/pire")
+          size = executable.stat().st_size
+          maximum = 25 * 1024 * 1024
+          print(f"{executable}: {size} bytes ({size / 1024 / 1024:.2f} MiB)")
+          if size > maximum:
+              raise SystemExit(f"release binary exceeds {maximum} byte budget")
+          pathlib.Path(f"binary-size-{platform.system()}.txt").write_text(
+              f"path={executable}\nbytes={size}\nmib={size / 1024 / 1024:.2f}\nbudget_bytes={maximum}\n",
+              encoding="utf-8",
+          )
+
+      - name: Smoke test
+        shell: python
+        run: |
+          import pathlib
+          import platform
+          import subprocess
+          import tempfile
+
+          executable = pathlib.Path("work/target/release/pire.exe" if platform.system() == "Windows" else "work/target/release/pire")
+          workspace = pathlib.Path(tempfile.mkdtemp(prefix="pire-smoke-"))
+          commands = [
+              [str(executable), "--version"],
+              [str(executable), "--workspace", str(workspace), "doctor"],
+              [str(executable), "--workspace", str(workspace), "plugins"],
+              [str(executable), "--workspace", str(workspace), "--no-session", "--print", "hello"],
+          ]
+          for command in commands:
+              print("$", " ".join(command))
+              completed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+              print(completed.stdout)
+              print(completed.stderr)
+              if completed.returncode != 0:
+                  raise SystemExit(completed.returncode)
+
+      - name: Package compiler-verified source
+        if: success() && matrix.os == 'ubuntu-latest'
+        shell: python
+        run: |
+          import hashlib
+          import pathlib
+          import shutil
+          import tarfile
+
+          source = pathlib.Path("work")
+          staging = pathlib.Path("package/pire")
+          shutil.rmtree(staging.parent, ignore_errors=True)
+          staging.parent.mkdir(parents=True)
+
+          def ignore(directory, names):
+              return {name for name in names if name in {"target", ".git"}}
+
+          shutil.copytree(source, staging, ignore=ignore)
+          report = staging / "VERIFICATION.txt"
+          linux_size = pathlib.Path("binary-size-Linux.txt").read_text(encoding="utf-8")
+          report.write_text(
+              "Pire plugin-first v0.2 compiler verification\n"
+              "Rust: 1.97.1\n"
+              "Platforms: Ubuntu, macOS, Windows matrix\n"
+              "Gates: fmt, check --all-targets, clippy -D warnings, tests, release build, smoke tests\n\n"
+              + linux_size,
+              encoding="utf-8",
+          )
+
+          archive = pathlib.Path("pire-plugin-first-v02-final-verified.tar.gz")
+          with tarfile.open(archive, "w:gz") as bundle:
+              bundle.add(staging, arcname="pire")
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          pathlib.Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+          print(f"SHA-256: {digest}")
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: pire-plugin-first-v02-final-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            binary-size-${{ runner.os }}.txt
+            pire-plugin-first-v02-final-verified.tar.gz
+            pire-plugin-first-v02-final-verified.tar.gz.sha256
