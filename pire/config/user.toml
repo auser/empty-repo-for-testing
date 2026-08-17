@@ -1,0 +1,158 @@
+# Full user-scoped Pire configuration.
+#
+# Platform location is shown by:
+#   pire config paths
+#
+# Credentials are environment-variable names, never literal secrets.
+
+[[models]]
+id = "offline"
+kind = "offline"
+provider_name = "offline"
+model = "offline"
+enabled = true
+local = true
+priority = -100
+tags = ["general", "testing"]
+input_cost_per_million = 0.0
+output_cost_per_million = 0.0
+context_window = 128000
+timeout_secs = 120
+max_response_bytes = 8388608
+
+[models.capabilities]
+tools = true
+parallel_tools = false
+vision = false
+structured_output = false
+reasoning = false
+streaming = false
+
+# OpenAI-compatible local endpoint. No Ollama process is required.
+#
+# [[models]]
+# id = "local-coder"
+# kind = "open-ai-compatible"
+# provider_name = "llama.cpp"
+# model = "qwen-coder"
+# base_url = "http://127.0.0.1:8080/v1"
+# enabled = true
+# local = true
+# priority = 30
+# tags = ["general", "coding", "review", "debugging", "tools"]
+# input_cost_per_million = 0.0
+# output_cost_per_million = 0.0
+# context_window = 131072
+# timeout_secs = 300
+# max_response_bytes = 8388608
+#
+# [models.capabilities]
+# tools = true
+# parallel_tools = false
+# vision = false
+# structured_output = true
+# reasoning = false
+# streaming = false
+
+# Cloud endpoint. Keep current prices in your own configuration.
+#
+# [[models]]
+# id = "cloud-reasoner"
+# kind = "open-ai-compatible"
+# provider_name = "openai"
+# model = "YOUR_MODEL_ID"
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"
+# enabled = true
+# local = false
+# priority = 40
+# tags = ["general", "coding", "review", "debugging", "planning", "reasoning"]
+# input_cost_per_million = 0.0
+# output_cost_per_million = 0.0
+# context_window = 128000
+# timeout_secs = 180
+# max_response_bytes = 8388608
+#
+# [models.capabilities]
+# tools = true
+# parallel_tools = true
+# vision = false
+# structured_output = true
+# reasoning = true
+# streaming = false
+
+# On-demand local adapter. It reads a pire-provider-v1 JSON request from stdin
+# and writes one ProviderResponse JSON value to stdout.
+#
+# [[models]]
+# id = "command-local"
+# kind = "command"
+# provider_name = "local-runtime"
+# model = "local-coder"
+# command = ["/absolute/path/to/pire-local-adapter", "--model", "/models/coder.gguf"]
+# enabled = true
+# local = true
+# priority = 20
+# tags = ["general", "coding", "tools"]
+# input_cost_per_million = 0.0
+# output_cost_per_million = 0.0
+# context_window = 32768
+# timeout_secs = 300
+# max_response_bytes = 8388608
+#
+# [models.capabilities]
+# tools = true
+
+[router]
+enabled = true
+strategy = "balanced"
+prefer_local = true
+max_fallbacks = 2
+assumed_output_tokens = 2048
+# max_estimated_cost_usd = 0.25
+
+[agent]
+max_steps = 24
+max_tool_calls = 96
+
+[tools]
+allow_read = true
+allow_write = true
+allow_process = false
+max_read_bytes = 4194304
+max_write_bytes = 4194304
+max_process_output_bytes = 2097152
+process_timeout_secs = 120
+max_list_entries = 10000
+
+[sessions]
+enabled = true
+# directory = "/absolute/path/to/pire-sessions"
+
+[security]
+require_project_trust = true
+approval_mode = "prompt"
+
+[resources]
+max_total_bytes = 1048576
+include_user_instructions = true
+load_skills_on_demand = true
+
+[learning]
+enabled = true
+# path = "/absolute/path/to/routing-learning.json"
+
+[plugins]
+enabled = true
+directories = []
+timeout_secs = 120
+max_message_bytes = 8388608
+
+[ui]
+color = true
+history_limit = 500
+show_cost = true
+
+[logging]
+level = "info"
+json = false
