@@ -48,6 +48,7 @@ jobs:
           cd source
           patch -p1 < ../hologram-live-v1.patch
           patch -p1 < ../hologram-live-v1-fix2.patch
+          patch -p1 < ../hologram-live-v1-fix3.patch
           test -f Cargo.toml
           test -f src/main.rs
           count="$(find . -type f -name '*.rs' | wc -l | tr -d ' ')"
