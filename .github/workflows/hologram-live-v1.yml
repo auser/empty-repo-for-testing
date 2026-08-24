@@ -7,6 +7,12 @@ on:
     paths:
       - 'hologram-live-v1-src.part*'
       - '.github/workflows/hologram-live-v1.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'hologram-live-v1-src.part*'
+      - '.github/workflows/hologram-live-v1.yml'
   workflow_dispatch:
 
 permissions:
