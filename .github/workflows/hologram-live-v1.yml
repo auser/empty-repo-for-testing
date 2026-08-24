@@ -41,15 +41,21 @@ jobs:
               hologram-live-v1-src.part05 \
             | base64 --decode > /tmp/hologram-live-v1.tar.gz
           tar -xzf /tmp/hologram-live-v1.tar.gz -C source
+          # The source archive initially declared 1.85; current reqwest/url
+          # resolution requires 1.88. Keep the clean verification run aligned
+          # with the corrected project minimum while the final archive is rebuilt.
+          sed -i 's/rust-version = "1.85"/rust-version = "1.88"/' source/Cargo.toml
+          sed -i 's/channel = "1.85.0"/channel = "1.88.0"/' source/rust-toolchain.toml
           test -f source/Cargo.toml
           test -f source/src/main.rs
           count="$(find source -type f -name '*.rs' | wc -l | tr -d ' ')"
           echo "Rust source files: ${count}"
           test "${count}" -ge 20
           grep -q 'name = "hologram"' source/Cargo.toml
+          grep -q 'rust-version = "1.88"' source/Cargo.toml
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
 
