@@ -1,0 +1,12 @@
+diff --git a/src/module.rs b/src/module.rs
+--- a/src/module.rs
++++ b/src/module.rs
+@@ -165,6 +165,7 @@ mod tests {
+     fn default_modules_resolve_in_dependency_order() {
+         let config = crate::config::ModulesConfig::default();
+         let registry = ModuleRegistry::build(&config.enabled).expect("resolve");
+-        assert!(registry.supports(crate::protocol::operation::HOLO_RUN));
++        assert!(registry.supports(crate::protocol::operation::HOLO_INSPECT));
++        assert!(!registry.supports(crate::protocol::operation::HOLO_RUN));
+     }
+ }

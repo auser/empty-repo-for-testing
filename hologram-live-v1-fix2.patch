@@ -1,0 +1,13 @@
+diff --git a/src/holo.rs b/src/holo.rs
+--- a/src/holo.rs
++++ b/src/holo.rs
+@@ -86,7 +86,9 @@ impl HoloCatalog {
+     /// Produce the smallest structurally valid archive for smoke tests and
+     /// parser demonstrations. It is intentionally non-executable.
+     pub fn fixture() -> Result<Vec<u8>> {
+-        Ok(HoloWriter::assemble(Vec::new()))
++        HoloWriter::new()
++            .finish()
++            .map_err(|error| LiveError::InvalidHolo(error.to_string()))
+     }
+ }

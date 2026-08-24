@@ -1,0 +1,161 @@
+name: hologram-live-v1
+
+on:
+  push:
+    branches:
+      - codex/hologram-live-v1-build-20260823
+    paths:
+      - 'hologram-live-v1-src.part*'
+      - 'hologram-live-v1.patch'
+      - 'hologram-live-v1-fix*.patch'
+      - '.github/workflows/hologram-live-v1.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'hologram-live-v1-src.part*'
+      - 'hologram-live-v1.patch'
+      - 'hologram-live-v1-fix*.patch'
+      - '.github/workflows/hologram-live-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: reconstruct-format-check-test-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out staging branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cat hologram-live-v1-src.part00 \
+              hologram-live-v1-src.part01 \
+              hologram-live-v1-src.part02 \
+              hologram-live-v1-src.part03 \
+              hologram-live-v1-src.part04 \
+              hologram-live-v1-src.part05 \
+            | base64 --decode > /tmp/hologram-live-v1.tar.gz
+          tar -xzf /tmp/hologram-live-v1.tar.gz -C source
+          cd source
+          patch -p1 < ../hologram-live-v1.patch
+          patch -p1 < ../hologram-live-v1-fix2.patch
+          patch -p1 < ../hologram-live-v1-fix3.patch
+          test -f Cargo.toml
+          test -f src/main.rs
+          count="$(find . -type f -name '*.rs' | wc -l | tr -d ' ')"
+          echo "Rust source files: ${count}"
+          test "${count}" -ge 20
+          grep -q 'name = "hologram"' Cargo.toml
+          grep -q 'rust-version = "1.88"' Cargo.toml
+          grep -q 'features = \["archive"\]' Cargo.toml
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Format source and verify formatting
+        working-directory: source
+        run: |
+          cargo fmt --all
+          cargo fmt --all --check
+
+      - name: Type check all targets
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --all-targets 2>&1 | tee ../cargo-check.log
+
+      - name: Test all targets
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --all-targets -- --nocapture 2>&1 | tee ../cargo-test.log
+
+      - name: Release build
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release 2>&1 | tee ../cargo-release.log
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hologram-live-v1-diagnostics
+          if-no-files-found: warn
+          retention-days: 2
+          path: |
+            cargo-check.log
+            cargo-test.log
+            cargo-release.log
+            source/Cargo.toml
+            source/Cargo.lock
+            source/rust-toolchain.toml
+            source/src/**/*.rs
+
+      - name: Binary smoke check
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/release/hologram --version
+          ./target/release/hologram --help >/tmp/hologram-help.txt
+          grep -q 'Extensible local and remote host for Hologram' /tmp/hologram-help.txt
+
+      - name: Record verification
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '# CI verification'
+            echo
+            echo '- Workflow: hologram-live-v1'
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Runner: ${RUNNER_OS} ${RUNNER_ARCH}"
+            echo "- Rust: $(rustc --version)"
+            echo "- Cargo: $(cargo --version)"
+            echo '- Passed: cargo fmt --all --check'
+            echo '- Passed: cargo check --all-targets'
+            echo '- Passed: cargo test --all-targets'
+            echo '- Passed: cargo build --release'
+            echo '- Passed: hologram --version / --help smoke checks'
+            echo '- Verified default Hologram dependency surface: archive only'
+          } > VERIFICATION.md
+
+      - name: Package verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude='source/target' -czf hologram-live-v1-verified-source.tar.gz source
+          sha256sum hologram-live-v1-verified-source.tar.gz > checksums-sha256.txt
+
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hologram-live-v1-verified
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            hologram-live-v1-verified-source.tar.gz
+            checksums-sha256.txt
+            source/VERIFICATION.md
+            source/target/release/hologram

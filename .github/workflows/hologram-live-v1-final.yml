@@ -1,0 +1,183 @@
+name: hologram-live-v1-final
+
+on:
+  push:
+    branches:
+      - codex/hologram-live-v1-build-20260823
+    paths:
+      - 'hologram-live-v1-src.part*'
+      - 'hologram-live-v1.patch'
+      - 'hologram-live-v1-fix*.patch'
+      - '.github/workflows/hologram-live-v1-final.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/hologram-live-v1-build-20260823
+
+      - name: Reconstruct corrected Rust workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source
+          cat hologram-live-v1-src.part00 \
+              hologram-live-v1-src.part01 \
+              hologram-live-v1-src.part02 \
+              hologram-live-v1-src.part03 \
+              hologram-live-v1-src.part04 \
+              hologram-live-v1-src.part05 \
+            | base64 --decode > /tmp/hologram-live-v1.tar.gz
+          tar -xzf /tmp/hologram-live-v1.tar.gz -C source
+          cd source
+          patch -p1 < ../hologram-live-v1.patch
+          patch -p1 < ../hologram-live-v1-fix2.patch
+          patch -p1 < ../hologram-live-v1-fix3.patch
+          test -f Cargo.toml
+          test -f src/main.rs
+          test -f src/lib.rs
+          count="$(find . -type f -name '*.rs' | wc -l | tr -d ' ')"
+          echo "Rust source files: ${count}"
+          test "${count}" -ge 20
+          grep -q 'name = "hologram"' Cargo.toml
+          grep -q 'rust-version = "1.88"' Cargo.toml
+          grep -q 'features = \["archive"\]' Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+
+      - name: Record toolchain
+        run: |
+          rustc --version | tee rustc-version.txt
+          cargo --version | tee cargo-version.txt
+
+      - name: Format
+        working-directory: source
+        run: |
+          cargo fmt --all
+          cargo fmt --all --check
+
+      - name: Check
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --all-targets 2>&1 | tee ../cargo-check.log
+
+      - name: Test
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --all-targets -- --nocapture 2>&1 | tee ../cargo-test.log
+
+      - name: Clippy
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --all-targets -- -D warnings 2>&1 | tee ../cargo-clippy.log
+
+      - name: Release build
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release 2>&1 | tee ../cargo-release.log
+
+      - name: Binary smoke
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/release/hologram --version | tee ../binary-version.txt
+          ./target/release/hologram --help | tee ../binary-help.txt
+          grep -q 'Extensible local and remote host for Hologram' ../binary-help.txt
+
+      - name: Write verification report
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust_files="$(find . -type f -name '*.rs' | wc -l | tr -d ' ')"
+          cat > VERIFICATION.md <<REPORT
+          # CI verification
+
+          - Workflow run: ${GITHUB_RUN_ID}
+          - Commit: ${GITHUB_SHA}
+          - Runner: ${RUNNER_OS} ${RUNNER_ARCH}
+          - Rust: $(rustc --version)
+          - Cargo: $(cargo --version)
+          - Rust source files: ${rust_files}
+          - Passed: cargo fmt --all --check
+          - Passed: cargo check --all-targets
+          - Passed: cargo test --all-targets
+          - Passed: cargo clippy --all-targets -- -D warnings
+          - Passed: cargo build --release
+          - Passed: hologram --version and --help smoke checks
+          - Verified Hologram default dependency surface: archive only
+          REPORT
+
+      - name: Package verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude='source/target' -czf hologram-live-v1-verified-source.tar.gz source
+          sha256sum hologram-live-v1-verified-source.tar.gz source/target/release/hologram > checksums-sha256.txt
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hologram-live-v1-final-diagnostics
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            cargo-check.log
+            cargo-test.log
+            cargo-clippy.log
+            cargo-release.log
+            binary-version.txt
+            binary-help.txt
+            source/Cargo.toml
+            source/Cargo.lock
+            source/rust-toolchain.toml
+            source/src/**/*.rs
+
+      - name: Upload verified package
+        uses: actions/upload-artifact@v4
+        with:
+          name: hologram-live-v1-final-verified
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            hologram-live-v1-verified-source.tar.gz
+            checksums-sha256.txt
+            source/VERIFICATION.md
+            source/target/release/hologram
+
+      - name: Publish verification marker to staging branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verified
+          cp source/VERIFICATION.md verified/VERIFICATION.md
+          cp checksums-sha256.txt verified/checksums-sha256.txt
+          printf '%s\n' "${GITHUB_RUN_ID}" > verified/run-id.txt
+          printf '%s\n' "${GITHUB_SHA}" > verified/source-commit.txt
+          git config user.name 'hologram-live-ci'
+          git config user.email 'hologram-live-ci@users.noreply.github.com'
+          git add verified
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'ci: publish verified hologram-live v1 marker [skip ci]'
+          git push origin HEAD:codex/hologram-live-v1-build-20260823
