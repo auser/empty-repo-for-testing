@@ -1,0 +1,343 @@
+diff -ruN branch-src/Cargo.toml /mnt/data/hologram-live-v1-final/Cargo.toml
+--- branch-src/Cargo.toml	2026-08-24 01:36:32.000000000 +0000
++++ /mnt/data/hologram-live-v1-final/Cargo.toml	2026-08-24 02:20:27.914340281 +0000
+@@ -2,7 +2,7 @@
+ name = "hologram-live"
+ version = "1.0.0"
+ edition = "2021"
+-rust-version = "1.85"
++rust-version = "1.88"
+ license = "MIT OR Apache-2.0"
+ description = "Extensible local and remote module host for Hologram"
+ repository = "https://github.com/Hologram-Technologies/hologram-live"
+@@ -31,9 +31,11 @@
+ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
+ utoipa = { version = "5", features = ["axum_extras"] }
+ 
+-# The only domain runtime dependency. It supplies the canonical .holo loader,
+-# CPU backend, persistent inference session, and archive writer.
+-hologram = { package = "uor-hologram", git = "https://github.com/Hologram-Technologies/hologram", rev = "94ecb886811115491a77c8229e494965bea03fc2", default-features = false, features = ["std", "archive", "backend", "compiler", "exec", "graph", "types"] }
++# The only domain dependency. The stable default uses the canonical .holo
++# archive reader/writer only. The pinned upstream x86 CPU backend currently
++# depends on unstable AVX-512 intrinsics, so execution is represented by a
++# typed provider seam rather than hidden behind RUSTC_BOOTSTRAP.
++hologram = { package = "uor-hologram", git = "https://github.com/Hologram-Technologies/hologram", rev = "94ecb886811115491a77c8229e494965bea03fc2", default-features = false, features = ["archive"] }
+ 
+ [profile.release]
+ lto = "thin"
+diff -ruN branch-src/rust-toolchain.toml /mnt/data/hologram-live-v1-final/rust-toolchain.toml
+--- branch-src/rust-toolchain.toml	2026-08-24 01:26:32.000000000 +0000
++++ /mnt/data/hologram-live-v1-final/rust-toolchain.toml	2026-08-24 01:53:51.084308144 +0000
+@@ -1,4 +1,4 @@
+ [toolchain]
+-channel = "1.85.0"
++channel = "1.88.0"
+ profile = "minimal"
+ components = ["clippy", "rustfmt"]
+diff -ruN branch-src/src/holo.rs /mnt/data/hologram-live-v1-final/src/holo.rs
+--- branch-src/src/holo.rs	2026-08-24 01:38:47.000000000 +0000
++++ /mnt/data/hologram-live-v1-final/src/holo.rs	2026-08-24 02:20:27.471469975 +0000
+@@ -1,20 +1,19 @@
+-use crate::actor::{spawn_blocking_actor, ActorRef, BlockingActor};
+ use crate::error::{LiveError, Result};
+ use crate::protocol::{HoloInspection, HoloRunResult, HoloSection, ResidentHolo};
+ use crate::store::ObjectStore;
+ use crate::util::hex;
+-use hologram::archive::HoloLoader;
+-use hologram::backend::CpuBackend;
+-use hologram::exec::{BufferArena, InferenceSession, InputBuffer};
+-use std::collections::BTreeMap;
++use hologram::archive::{HoloLoader, HoloWriter};
+ use std::sync::Arc;
+-use std::time::Instant;
+-use tokio::sync::{oneshot, RwLock};
+ 
+ const HOLO_MEDIA_TYPE: &str = "application/vnd.hologram.holo";
+ 
+-type CpuSession = InferenceSession<CpuBackend<BufferArena>>;
+-
++/// Stable, content-addressed catalog support for `.holo` archives.
++///
++/// The default Hologram Live build intentionally depends only on the archive
++/// surface of the pinned Hologram revision. The pinned upstream x86 CPU runtime
++/// currently compiles AVX-512 intrinsics that require unstable Rust APIs; Live
++/// refuses to hide that behind `RUSTC_BOOTSTRAP`. Runtime execution remains an
++/// explicit capability seam until the upstream stable-toolchain issue is fixed.
+ pub struct HoloCatalog {
+     store: Arc<ObjectStore>,
+ }
+@@ -84,15 +83,10 @@
+         self.store.remove_metadata(kappa)
+     }
+ 
++    /// Produce the smallest structurally valid archive for smoke tests and
++    /// parser demonstrations. It is intentionally non-executable.
+     pub fn fixture() -> Result<Vec<u8>> {
+-        let graph = hologram::graph::Graph::new();
+-        let compiled = hologram::compiler::compile(
+-            graph,
+-            hologram::compiler::BackendKind::Cpu,
+-            hologram::types::prism::vocabulary::WittLevel::new(32),
+-        )
+-        .map_err(|error| LiveError::InvalidHolo(format!("compile fixture: {error}")))?;
+-        Ok(compiled.archive)
++        Ok(HoloWriter::assemble(Vec::new()))
+     }
+ }
+ 
+@@ -124,174 +118,42 @@
+     })
+ }
+ 
+-enum ResidentMessage {
+-    Run {
+-        inputs: Vec<Vec<u8>>,
+-        reply: oneshot::Sender<Result<HoloRunResult>>,
+-    },
+-    Info {
+-        reply: oneshot::Sender<ResidentSnapshot>,
+-    },
+-}
+-
+-struct ResidentSnapshot {
+-    input_count: usize,
+-    output_count: usize,
+-    resident_bytes: usize,
+-}
+-
+-struct ResidentActor {
+-    kappa: String,
+-    session: CpuSession,
+-}
+-
+-impl BlockingActor for ResidentActor {
+-    type Message = ResidentMessage;
+-
+-    fn handle(&mut self, message: Self::Message) -> Result<()> {
+-        match message {
+-            ResidentMessage::Run { inputs, reply } => {
+-                let started = Instant::now();
+-                let input_buffers: Vec<InputBuffer<'_>> = inputs
+-                    .iter()
+-                    .map(|bytes| InputBuffer {
+-                        bytes: bytes.as_slice(),
+-                    })
+-                    .collect();
+-                let result = self
+-                    .session
+-                    .execute(&input_buffers)
+-                    .map(|outputs| HoloRunResult {
+-                        kappa: self.kappa.clone(),
+-                        outputs: outputs.into_iter().map(|output| output.bytes).collect(),
+-                        elapsed_micros: started
+-                            .elapsed()
+-                            .as_micros()
+-                            .try_into()
+-                            .unwrap_or(u64::MAX),
+-                        resident_bytes: self.session.resident_bytes(),
+-                    })
+-                    .map_err(|error| LiveError::InvalidHolo(error.to_string()));
+-                let _ = reply.send(result);
+-            }
+-            ResidentMessage::Info { reply } => {
+-                let _ = reply.send(ResidentSnapshot {
+-                    input_count: self.session.input_count(),
+-                    output_count: self.session.output_count(),
+-                    resident_bytes: self.session.resident_bytes(),
+-                });
+-            }
+-        }
+-        Ok(())
+-    }
+-}
+-
++/// Execution-provider seam retained by the module API.
++///
++/// The stable v1 default advertises archive operations only, so these methods
++/// are never selected by capability-aware clients. Direct callers still get a
++/// typed, honest `LIVE_CAPABILITY_MISSING` error instead of a silent fallback.
+ pub struct HoloRuntime {
+-    catalog: Arc<HoloCatalog>,
+-    mailbox_capacity: usize,
+-    actors: RwLock<BTreeMap<String, ActorRef<ResidentMessage>>>,
++    _catalog: Arc<HoloCatalog>,
+ }
+ 
+ impl HoloRuntime {
+-    pub fn new(catalog: Arc<HoloCatalog>, mailbox_capacity: usize) -> Self {
+-        Self {
+-            catalog,
+-            mailbox_capacity,
+-            actors: RwLock::new(BTreeMap::new()),
+-        }
++    pub fn new(catalog: Arc<HoloCatalog>, _mailbox_capacity: usize) -> Self {
++        Self { _catalog: catalog }
+     }
+ 
+     pub async fn load(&self, kappa: &str) -> Result<ResidentHolo> {
+-        if let Some(actor) = self.actors.read().await.get(kappa).cloned() {
+-            return actor_info(kappa, &actor).await;
+-        }
+-        let bytes = self.catalog.bytes(kappa)?;
+-        let kappa_owned = kappa.to_owned();
+-        let session = tokio::task::spawn_blocking(move || {
+-            let backend: CpuBackend<BufferArena> = CpuBackend::new();
+-            InferenceSession::load(&bytes, backend)
+-                .map_err(|error| LiveError::InvalidHolo(error.to_string()))
+-        })
+-        .await
+-        .map_err(|error| LiveError::Conflict(format!("join .holo loader: {error}")))??;
+-        let actor = spawn_blocking_actor(
+-            format!("holo-{kappa_owned}"),
+-            self.mailbox_capacity,
+-            ResidentActor {
+-                kappa: kappa_owned.clone(),
+-                session,
+-            },
+-        )?;
+-        let mut actors = self.actors.write().await;
+-        let actor = actors
+-            .entry(kappa_owned.clone())
+-            .or_insert_with(|| actor)
+-            .clone();
+-        drop(actors);
+-        actor_info(&kappa_owned, &actor).await
++        Err(runtime_unavailable(kappa))
+     }
+ 
+     pub async fn unload(&self, kappa: &str) -> Result<()> {
+-        if self.actors.write().await.remove(kappa).is_none() {
+-            return Err(LiveError::NotFound(format!(
+-                ".holo archive {kappa} is not resident"
+-            )));
+-        }
+-        Ok(())
++        Err(runtime_unavailable(kappa))
+     }
+ 
+-    pub async fn run(&self, kappa: &str, inputs: Vec<Vec<u8>>) -> Result<HoloRunResult> {
+-        self.load(kappa).await?;
+-        let actor = self
+-            .actors
+-            .read()
+-            .await
+-            .get(kappa)
+-            .cloned()
+-            .ok_or_else(|| LiveError::Conflict("resident actor disappeared".to_owned()))?;
+-        let (sender, receiver) = oneshot::channel();
+-        actor
+-            .send(ResidentMessage::Run {
+-                inputs,
+-                reply: sender,
+-            })
+-            .await?;
+-        receiver
+-            .await
+-            .map_err(|_| LiveError::Conflict("resident .holo actor stopped".to_owned()))?
++    pub async fn run(&self, kappa: &str, _inputs: Vec<Vec<u8>>) -> Result<HoloRunResult> {
++        Err(runtime_unavailable(kappa))
+     }
+ 
+     pub async fn list(&self) -> Result<Vec<ResidentHolo>> {
+-        let actors: Vec<(String, ActorRef<ResidentMessage>)> = self
+-            .actors
+-            .read()
+-            .await
+-            .iter()
+-            .map(|(kappa, actor)| (kappa.clone(), actor.clone()))
+-            .collect();
+-        let mut output = Vec::with_capacity(actors.len());
+-        for (kappa, actor) in actors {
+-            output.push(actor_info(&kappa, &actor).await?);
+-        }
+-        Ok(output)
++        Ok(Vec::new())
+     }
+ }
+ 
+-async fn actor_info(kappa: &str, actor: &ActorRef<ResidentMessage>) -> Result<ResidentHolo> {
+-    let (sender, receiver) = oneshot::channel();
+-    actor.send(ResidentMessage::Info { reply: sender }).await?;
+-    let snapshot = receiver
+-        .await
+-        .map_err(|_| LiveError::Conflict("resident .holo actor stopped".to_owned()))?;
+-    let stats = actor.stats();
+-    Ok(ResidentHolo {
+-        kappa: kappa.to_owned(),
+-        input_count: snapshot.input_count,
+-        output_count: snapshot.output_count,
+-        resident_bytes: snapshot.resident_bytes,
+-        queued: stats.queued(),
+-        processed: stats.processed(),
+-    })
++fn runtime_unavailable(kappa: &str) -> LiveError {
++    LiveError::Capability(format!(
++        ".holo execution for {kappa} is not compiled into the stable v1 build; \
++         import, inspect, and verify are available"
++    ))
+ }
+ 
+ #[cfg(test)]
+@@ -305,4 +167,16 @@
+         assert!(inspection.footer_verified);
+         assert_eq!(inspection.format_version, 3);
+     }
++
++    #[tokio::test]
++    async fn execution_fails_with_typed_capability_error() {
++        let temporary = std::env::temp_dir().join(format!(
++            "hologram-live-holo-test-{}",
++            std::process::id()
++        ));
++        let store = Arc::new(ObjectStore::open(temporary).expect("store"));
++        let runtime = HoloRuntime::new(Arc::new(HoloCatalog::new(store)), 1);
++        let error = runtime.run("blake3:test", Vec::new()).await.expect_err("must fail");
++        assert_eq!(error.code(), "LIVE_CAPABILITY_MISSING");
++    }
+ }
+diff -ruN branch-src/src/modules/holo.rs /mnt/data/hologram-live-v1-final/src/modules/holo.rs
+--- branch-src/src/modules/holo.rs	2026-08-24 01:31:08.000000000 +0000
++++ /mnt/data/hologram-live-v1-final/src/modules/holo.rs	2026-08-24 02:20:28.465754379 +0000
+@@ -1,7 +1,7 @@
+ use crate::app::AppState;
+ use crate::module::{LiveModule, ModuleDescriptor, OperationDescriptor};
+ use crate::modules::HttpError;
+-use crate::protocol::{operation, HoloInspection, OperationKind, ResidentHolo};
++use crate::protocol::{operation, HoloInspection, OperationKind};
+ use axum::extract::{Path, State};
+ use axum::routing::get;
+ use axum::{Json, Router};
+@@ -12,10 +12,6 @@
+     OperationDescriptor { id: operation::HOLO_INSPECT, kind: OperationKind::Read, fallback_safe_before_dispatch: true },
+     OperationDescriptor { id: operation::HOLO_VERIFY, kind: OperationKind::Read, fallback_safe_before_dispatch: true },
+     OperationDescriptor { id: operation::HOLO_REMOVE, kind: OperationKind::Mutation, fallback_safe_before_dispatch: false },
+-    OperationDescriptor { id: operation::HOLO_LOAD, kind: OperationKind::Mutation, fallback_safe_before_dispatch: false },
+-    OperationDescriptor { id: operation::HOLO_UNLOAD, kind: OperationKind::Mutation, fallback_safe_before_dispatch: false },
+-    OperationDescriptor { id: operation::HOLO_RUN, kind: OperationKind::Stream, fallback_safe_before_dispatch: false },
+-    OperationDescriptor { id: operation::HOLO_RESIDENT, kind: OperationKind::Read, fallback_safe_before_dispatch: true },
+ ];
+ 
+ static DESCRIPTOR: ModuleDescriptor = ModuleDescriptor {
+@@ -35,7 +31,6 @@
+         Router::new()
+             .route("/api/v1/holo", get(list_holo))
+             .route("/api/v1/holo/{kappa}", get(inspect_holo))
+-            .route("/api/v1/holo/resident", get(list_resident))
+     }
+ }
+ 
+@@ -70,14 +65,3 @@
+         .map_err(|error| crate::error::LiveError::Conflict(format!("join .holo inspect: {error}")))??;
+     Ok(Json(inspection))
+ }
+-
+-#[utoipa::path(
+-    get,
+-    path = "/api/v1/holo/resident",
+-    responses((status = 200, body = [ResidentHolo]))
+-)]
+-pub async fn list_resident(
+-    State(state): State<AppState>,
+-) -> Result<Json<Vec<ResidentHolo>>, HttpError> {
+-    Ok(Json(state.holo_runtime().list().await?))
+-}
