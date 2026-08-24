@@ -6,12 +6,14 @@ on:
       - codex/hologram-live-v1-build-20260823
     paths:
       - 'hologram-live-v1-src.part*'
+      - 'hologram-live-v1.patch'
       - '.github/workflows/hologram-live-v1.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'hologram-live-v1-src.part*'
+      - 'hologram-live-v1.patch'
       - '.github/workflows/hologram-live-v1.yml'
   workflow_dispatch:
 
@@ -41,15 +43,16 @@ jobs:
               hologram-live-v1-src.part05 \
             | base64 --decode > /tmp/hologram-live-v1.tar.gz
           tar -xzf /tmp/hologram-live-v1.tar.gz -C source
-          sed -i 's/rust-version = "1.85"/rust-version = "1.88"/' source/Cargo.toml
-          sed -i 's/channel = "1.85.0"/channel = "1.88.0"/' source/rust-toolchain.toml
-          test -f source/Cargo.toml
-          test -f source/src/main.rs
-          count="$(find source -type f -name '*.rs' | wc -l | tr -d ' ')"
+          cd source
+          patch -p1 < ../hologram-live-v1.patch
+          test -f Cargo.toml
+          test -f src/main.rs
+          count="$(find . -type f -name '*.rs' | wc -l | tr -d ' ')"
           echo "Rust source files: ${count}"
           test "${count}" -ge 20
-          grep -q 'name = "hologram"' source/Cargo.toml
-          grep -q 'rust-version = "1.88"' source/Cargo.toml
+          grep -q 'name = "hologram"' Cargo.toml
+          grep -q 'rust-version = "1.88"' Cargo.toml
+          grep -q 'features = \["archive"\]' Cargo.toml
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@1.88.0
@@ -84,6 +87,7 @@ jobs:
           path: |
             cargo-check.log
             source/Cargo.toml
+            source/Cargo.lock
             source/rust-toolchain.toml
             source/src/**/*.rs
 
@@ -122,6 +126,7 @@ jobs:
             echo '- Passed: cargo test --all-targets'
             echo '- Passed: cargo build --release'
             echo '- Passed: hologram --version / --help smoke checks'
+            echo '- Verified default Hologram dependency surface: archive only'
           } > VERIFICATION.md
 
       - name: Package verified source
