@@ -80,7 +80,21 @@ jobs:
           set -o pipefail
           cargo check --all-targets 2>&1 | tee ../cargo-check.log
 
-      - name: Upload compiler diagnostics
+      - name: Test all targets
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --all-targets -- --nocapture 2>&1 | tee ../cargo-test.log
+
+      - name: Release build
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release 2>&1 | tee ../cargo-release.log
+
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -89,18 +103,12 @@ jobs:
           retention-days: 2
           path: |
             cargo-check.log
+            cargo-test.log
+            cargo-release.log
             source/Cargo.toml
             source/Cargo.lock
             source/rust-toolchain.toml
             source/src/**/*.rs
-
-      - name: Test all targets
-        working-directory: source
-        run: cargo test --all-targets
-
-      - name: Release build
-        working-directory: source
-        run: cargo build --release
 
       - name: Binary smoke check
         working-directory: source
