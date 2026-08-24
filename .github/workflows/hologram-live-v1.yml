@@ -7,6 +7,7 @@ on:
     paths:
       - 'hologram-live-v1-src.part*'
       - 'hologram-live-v1.patch'
+      - 'hologram-live-v1-fix*.patch'
       - '.github/workflows/hologram-live-v1.yml'
   pull_request:
     branches:
@@ -14,6 +15,7 @@ on:
     paths:
       - 'hologram-live-v1-src.part*'
       - 'hologram-live-v1.patch'
+      - 'hologram-live-v1-fix*.patch'
       - '.github/workflows/hologram-live-v1.yml'
   workflow_dispatch:
 
@@ -45,6 +47,7 @@ jobs:
           tar -xzf /tmp/hologram-live-v1.tar.gz -C source
           cd source
           patch -p1 < ../hologram-live-v1.patch
+          patch -p1 < ../hologram-live-v1-fix2.patch
           test -f Cargo.toml
           test -f src/main.rs
           count="$(find . -type f -name '*.rs' | wc -l | tr -d ' ')"
