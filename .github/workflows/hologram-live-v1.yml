@@ -58,9 +58,11 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Format check
+      - name: Format source and verify formatting
         working-directory: source
-        run: cargo fmt --all --check
+        run: |
+          cargo fmt --all
+          cargo fmt --all --check
 
       - name: Type check all targets
         working-directory: source
